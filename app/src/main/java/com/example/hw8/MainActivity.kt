@@ -26,6 +26,10 @@ class MainActivity : AppCompatActivity() {
             postPost()
         }
 
+        findButton.setOnClickListener {
+            SearchPostsAsyncTask(this).execute(editText.text.toString())
+        }
+
         savedInstanceState ?: run {
             AllPostsAsyncTask(this).execute()
         }
@@ -42,6 +46,10 @@ class MainActivity : AppCompatActivity() {
             msg,
             Toast.LENGTH_SHORT
         ).show()
+    }
+
+    fun searchPosts(filter: String, postList: List<Post>): List<Post> {
+        return postList.filter { p -> p.title.contains(filter) }
     }
 
     fun viewPosts() {
@@ -68,6 +76,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    class SearchPostsAsyncTask(activity: MainActivity) : AsyncTask<String, Unit, List<Post>>() {
+        private val weakActivity = WeakReference(activity)
+        override fun doInBackground(vararg params: String?): List<Post> {
+            val filter = params[0] ?: ""
+            return weakActivity.get()?.searchPosts(filter, PostApp.instance.db.postDao().allPosts) ?: ArrayList()
+        }
+
+        override fun onPostExecute(result: List<Post>?) {
+            super.onPostExecute(result)
+            when {
+                result != null -> {
+                    PostApp.instance.posts.clear()
+                    PostApp.instance.posts.addAll(result)
+                }
+            }
+            weakActivity.get()?.myRecyclerView?.adapter?.notifyDataSetChanged()
+        }
+    }
+
     class DeletePostAsyncTask(activity: MainActivity) : AsyncTask<Post, Unit, Unit>() {
         private val weakActivity = WeakReference(activity)
         override fun doInBackground(vararg posts: Post?): Unit {
@@ -77,14 +104,14 @@ class MainActivity : AppCompatActivity() {
 
         override fun onPostExecute(result: Unit?) {
             super.onPostExecute(result)
-            weakActivity.get()!!.myRecyclerView.adapter!!.notifyDataSetChanged()
+            weakActivity.get()?.myRecyclerView?.adapter?.notifyDataSetChanged()
         }
     }
 
     class PostPostAsyncTask(activity: MainActivity) : AsyncTask<Unit, Unit, Unit>() {
         private val weakActivity = WeakReference(activity)
         override fun doInBackground(vararg p0: Unit?): Unit {
-            val newId = PostApp.instance.db.postDao().allPosts.last().id + 1
+            val newId = (PostApp.instance.db.postDao().allPosts.maxByOrNull { p -> p.id }?.id ?: 100) + 1
             val post = Post(
                     newId,
                     1,
@@ -97,7 +124,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onPostExecute(result: Unit?) {
             super.onPostExecute(result)
-            weakActivity.get()!!.myRecyclerView.adapter!!.notifyDataSetChanged()
+            weakActivity.get()?.myRecyclerView?.adapter?.notifyDataSetChanged()
         }
     }
 
@@ -117,8 +144,8 @@ class MainActivity : AppCompatActivity() {
 
         override fun onPostExecute(result: Unit?) {
             super.onPostExecute(result)
-            weakActivity.get()!!.progressBar.visibility = View.INVISIBLE
-            weakActivity.get()!!.myRecyclerView.adapter!!.notifyDataSetChanged()
+            weakActivity.get()?.progressBar?.visibility = View.INVISIBLE
+            weakActivity.get()?.myRecyclerView?.adapter?.notifyDataSetChanged()
             weakActivity.get()?.showToast("List downloaded")
         }
     }

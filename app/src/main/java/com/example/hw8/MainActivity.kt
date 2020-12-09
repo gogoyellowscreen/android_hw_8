@@ -6,8 +6,12 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.Toast
+import androidx.lifecycle.coroutineScope
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import kotlinx.android.synthetic.main.activity_main.*
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
@@ -19,25 +23,46 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         reset.setOnClickListener {
-            downloadPosts()
+            lifecycleScope.launch { downloadPosts() }
         }
 
         fab.setOnClickListener {
-            postPost()
+            lifecycleScope.launch { postPost() }
         }
 
         findButton.setOnClickListener {
-            SearchPostsAsyncTask(this).execute(editText.text.toString())
+            lifecycleScope.launch {
+                val filtered =
+                    searchPosts(editText.text.toString(), PostApp.instance.db.postDao().getAllPosts())
+                PostApp.instance.posts.clear()
+                PostApp.instance.posts.addAll(filtered)
+                myRecyclerView.adapter?.notifyDataSetChanged()
+            }
         }
 
         savedInstanceState ?: run {
-            AllPostsAsyncTask(this).execute()
+            lifecycleScope.launch {
+                PostApp.instance.posts.clear()
+                PostApp.instance.posts.addAll(PostApp.instance.db.postDao().getAllPosts())
+                viewPosts()
+            }
         }
         viewPosts()
     }
 
-    private fun postPost() {
-        PostPostAsyncTask(this).execute()
+    private suspend fun postPost() {
+        val newId =
+            (PostApp.instance.db.postDao().getAllPosts().maxByOrNull { p -> p.id }?.id ?: 100) + 1
+        val post = Post(
+            newId,
+            1,
+            "New title!",
+            "New body!"
+        )
+        PostApp.instance.db.postDao().insert(post)
+        PostApp.instance.posts.add(post)
+
+        myRecyclerView.adapter?.notifyDataSetChanged()
     }
 
     private fun showToast(msg: String) {
@@ -52,118 +77,46 @@ class MainActivity : AppCompatActivity() {
         return postList.filter { p -> p.title.contains(filter) }
     }
 
-    fun viewPosts() {
+    private fun viewPosts() {
         progressBar.visibility = View.INVISIBLE
         val viewManager = LinearLayoutManager(this)
         myRecyclerView.apply {
             layoutManager = viewManager
             adapter = PostAdapter(PostApp.instance.posts) {
-                DeletePostAsyncTask(this@MainActivity).execute(it)
+                lifecycleScope.launch { deletePost(it) }
             }
         }
     }
 
-    class AllPostsAsyncTask(activity: MainActivity) : AsyncTask<Unit, Unit, Unit>() {
-        private val weakActivity = WeakReference(activity)
-        override fun doInBackground(vararg p0: Unit?) {
-            PostApp.instance.posts.clear()
-            PostApp.instance.posts.addAll(PostApp.instance.db.postDao().allPosts)
-        }
-
-        override fun onPostExecute(result: Unit?) {
-            super.onPostExecute(result)
-            weakActivity.get()?.viewPosts()
-        }
+    private suspend fun deletePost(post: Post) {
+        PostApp.instance.db.postDao().delete(post)
+        PostApp.instance.posts.remove(post)
+        myRecyclerView.adapter?.notifyDataSetChanged()
     }
 
-    class SearchPostsAsyncTask(activity: MainActivity) : AsyncTask<String, Unit, List<Post>>() {
-        private val weakActivity = WeakReference(activity)
-        override fun doInBackground(vararg params: String?): List<Post> {
-            val filter = params[0] ?: ""
-            return weakActivity.get()?.searchPosts(filter, PostApp.instance.db.postDao().allPosts) ?: ArrayList()
-        }
+    private suspend fun downloadPosts() {
+        try {
+            progressBar.visibility = View.VISIBLE
+            val newPosts = PostApp.instance.service.listPosts()
 
-        override fun onPostExecute(result: List<Post>?) {
-            super.onPostExecute(result)
-            when {
-                result != null -> {
-                    PostApp.instance.posts.clear()
-                    PostApp.instance.posts.addAll(result)
-                }
-            }
-            weakActivity.get()?.myRecyclerView?.adapter?.notifyDataSetChanged()
-        }
-    }
-
-    class DeletePostAsyncTask(activity: MainActivity) : AsyncTask<Post, Unit, Unit>() {
-        private val weakActivity = WeakReference(activity)
-        override fun doInBackground(vararg posts: Post?): Unit {
-            PostApp.instance.db.postDao().delete(posts[0])
-            PostApp.instance.posts.remove(posts[0])
-        }
-
-        override fun onPostExecute(result: Unit?) {
-            super.onPostExecute(result)
-            weakActivity.get()?.myRecyclerView?.adapter?.notifyDataSetChanged()
-        }
-    }
-
-    class PostPostAsyncTask(activity: MainActivity) : AsyncTask<Unit, Unit, Unit>() {
-        private val weakActivity = WeakReference(activity)
-        override fun doInBackground(vararg p0: Unit?): Unit {
-            val newId = (PostApp.instance.db.postDao().allPosts.maxByOrNull { p -> p.id }?.id ?: 100) + 1
-            val post = Post(
-                    newId,
-                    1,
-                    "New title!",
-                    "New body!"
-            )
-            PostApp.instance.db.postDao().insert(post)
-            PostApp.instance.posts.add(post)
-        }
-
-        override fun onPostExecute(result: Unit?) {
-            super.onPostExecute(result)
-            weakActivity.get()?.myRecyclerView?.adapter?.notifyDataSetChanged()
-        }
-    }
-
-    class ResetAsyncTask(activity: MainActivity) : AsyncTask<List<Post>, Unit, Unit>() {
-        private val weakActivity = WeakReference(activity)
-        override fun doInBackground(vararg postsDownloaded: List<Post>?) {
-            val posts = PostApp.instance.db.postDao().allPosts
-            for (post in posts) {
+            val oldPosts = PostApp.instance.db.postDao().getAllPosts()
+            for (post in oldPosts) {
                 PostApp.instance.db.postDao().delete(post)
             }
-            for (post in postsDownloaded[0]!!) {
+
+            for (post in newPosts) {
                 PostApp.instance.db.postDao().insert(post)
             }
+
             PostApp.instance.posts.clear()
-            PostApp.instance.posts.addAll(postsDownloaded[0]!!)
+            PostApp.instance.posts.addAll(newPosts)
+
+            progressBar.visibility = View.INVISIBLE
+            myRecyclerView.adapter?.notifyDataSetChanged()
+            showToast("List downloaded")
+        } catch (_: Exception) {
+            progressBar.visibility = View.INVISIBLE
+            showToast("Connection Error")
         }
-
-        override fun onPostExecute(result: Unit?) {
-            super.onPostExecute(result)
-            weakActivity.get()?.progressBar?.visibility = View.INVISIBLE
-            weakActivity.get()?.myRecyclerView?.adapter?.notifyDataSetChanged()
-            weakActivity.get()?.showToast("List downloaded")
-        }
-    }
-
-    private fun downloadPosts() {
-        progressBar.visibility = View.VISIBLE
-        val callPosts = PostApp.instance.service.listPosts()
-        callPosts.enqueue(object : Callback<List<Post>> {
-            override fun onResponse(call: Call<List<Post>>, response: Response<List<Post>>) {
-                Log.d("Post Api", "DOWNLOAD SUCCESSFUL")
-                ResetAsyncTask(this@MainActivity).execute(response.body()!!)
-            }
-
-            override fun onFailure(call: Call<List<Post>>, t: Throwable) {
-                Log.e("Post Api", "failed", t)
-                progressBar.visibility = View.INVISIBLE
-                showToast("Connection error")
-            }
-        })
     }
 }
